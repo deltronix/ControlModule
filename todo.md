@@ -1,12 +1,12 @@
 # FIRMWARE:
 - Musical functionality:
- ✓ Clock sync
- - MIDI
- - Fill (euclidian)
+ 	- Clock sync
+ 	- MIDI
+ 	- Fill (euclidian)
 - Memory:
- - Saving multiple scenes
- - Internal FLASH storage
- - Settings
+ 	- Saving multiple scenes
+ 	- Internal FLASH storage
+ 	- Settings
 
 
 
