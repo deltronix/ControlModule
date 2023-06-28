@@ -43,9 +43,33 @@
 
 #define POWER_UP_ALL_DACS		0b00001111
 
+enum IO_STATE{
+	IO_READY,
+	IO_ANALOG_WRITE,
+	IO_DIGITAL_WRITE,
+	IO_DONE
+};
+struct AnalogBuffer{
+	bool glide;
+
+
+	uint16_t startValue, endValue, samplePosition;
+	uint32_t length, position;
+
+	int16_t incrementor;
+	uint16_t samples[96];
+};
 
 class IO{
 public:
+	IO_STATE ioState;
+	bool dmaTransferInProgress = 0;
+	bool waitingForBufferUpdate[2] = {true,true};
+	bool activeAnalogBuffer = 0;
+	uint8_t dmaChannel, dmaSample, dmaBuffer[4];
+	AnalogBuffer analogBuffer[4][2];
+	uint8_t digitalBuffer[2];
+
 	IO(SPI_HandleTypeDef* spi, UART_HandleTypeDef* uart);
 	~IO(void);
 	void setDacOutput(uint8_t chan, int16_t val);
@@ -55,6 +79,15 @@ public:
 	void writeDigitalOuts(void);
 	void initDacs(uint8_t range);
 	static const uint16_t scales[2][128];
+
+	bool updateAnalogBuffer(Scene& scene);
+	void setBufferParameters(Scene& scene);
+
+	IO_STATE dmaStateMachine(void);
+
+	void writeDacDma(void);
+	void writeDigitalDma(void);
+	void startDmaTransfer(Scene& scene);
 
 
 	bool midiTransferInProgress;

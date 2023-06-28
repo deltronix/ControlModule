@@ -13,9 +13,10 @@
 
 
 
-Scene::Scene(uint16_t beatClockTicks){
+Scene::Scene(uint16_t beatClockTicks):dis(0,15){
 	beatTicks = beatClockTicks;
 	stepTicks = beatClockTicks/nSteps;
+
 
 }
 
@@ -53,7 +54,7 @@ STEP_PARAMETER Scene::focusNextStepParameter(int16_t n){
 		if(n < 0){
 			switch(focusedStepParameter){
 			case STEP_PARAMETER_NOTE_ON:
-				focusedStepParameter = STEP_PARAMETER_GLIDE;
+				focusedStepParameter = STEP_PARAMETER_MOD;
 				break;
 			case STEP_PARAMETER_REPEAT:
 				focusedStepParameter = STEP_PARAMETER_NOTE_ON;
@@ -70,7 +71,7 @@ STEP_PARAMETER Scene::focusNextStepParameter(int16_t n){
 			case STEP_PARAMETER_INDEX:
 				focusedStepParameter = STEP_PARAMETER_PROBABILITY;
 				break;
-			case STEP_PARAMETER_GLIDE:
+			case STEP_PARAMETER_MOD:
 				focusedStepParameter = STEP_PARAMETER_INDEX;
 				break;
 			default:
@@ -96,9 +97,9 @@ STEP_PARAMETER Scene::focusNextStepParameter(int16_t n){
 				focusedStepParameter = STEP_PARAMETER_INDEX;
 				break;
 			case STEP_PARAMETER_INDEX:
-				focusedStepParameter = STEP_PARAMETER_GLIDE;
+				focusedStepParameter = STEP_PARAMETER_MOD;
 				break;
-			case STEP_PARAMETER_GLIDE:
+			case STEP_PARAMETER_MOD:
 				focusedStepParameter = STEP_PARAMETER_NOTE_ON;
 				break;
 			default:
@@ -146,6 +147,9 @@ const char*	Scene::stepParameterString(){
 		break;
 	case STEP_PARAMETER_GLIDE:
 		return "GLD ";
+		break;
+	case STEP_PARAMETER_MOD:
+		return "MOD ";
 		break;
 	default:
 		break;
@@ -235,6 +239,10 @@ void Scene::incrementDecrementStepParameter(int16_t n){
 		setStepParameter(focusedStepParameter, focusedStep,
 				getStepParameter(focusedStepParameter, focusedStep) + n - sceneData[activeScene].lane[focusedPart][focusedLane].indexOffset);
 	}
+	else if(focusedStepParameter == STEP_PARAMETER_MOD){
+		setStepParameter(focusedStepParameter, focusedStep,
+				getStepParameter(focusedStepParameter, focusedStep) + n - sceneData[activeScene].lane[focusedPart][focusedLane].modOffset);
+	}
 	else{
 		setStepParameter(focusedStepParameter, focusedStep,
 				getStepParameter(focusedStepParameter, focusedStep) + n);
@@ -271,7 +279,9 @@ void Scene::setStepParameter(STEP_PARAMETER param, uint8_t step, int8_t value){
 	case STEP_PARAMETER_INDEX:
 		setStepIndex(focusedPart, focusedLane, step, value);
 		break;
-
+	case STEP_PARAMETER_MOD:
+		setStepMod(focusedPart, focusedLane, step, value);
+		break;
 	}
 }
 void Scene::setStepParameter(STEP_PARAMETER param, uint8_t fromLane, uint8_t step, int8_t value){
@@ -299,8 +309,13 @@ void Scene::setStepParameter(STEP_PARAMETER param, uint8_t fromLane, uint8_t ste
 	case STEP_PARAMETER_INDEX:
 		setStepIndex(focusedPart, fromLane, step, value);
 		break;
+	case STEP_PARAMETER_MOD:
+		setStepMod(focusedPart, fromLane, step, value);
+	break;
+
 	}
 }
+
 
 uint8_t Scene::getStepParameter(STEP_PARAMETER param, uint8_t step){
 	switch(param){
@@ -321,6 +336,9 @@ uint8_t Scene::getStepParameter(STEP_PARAMETER param, uint8_t step){
 		break;
 	case STEP_PARAMETER_INDEX:
 		return getStepIndex(focusedPart, focusedLane, step) + sceneData[activeScene].lane[focusedPart][focusedLane].indexOffset;
+		break;
+	case STEP_PARAMETER_MOD:
+		return getStepMod(focusedPart, focusedLane, step) + sceneData[activeScene].lane[focusedPart][focusedLane].modOffset;
 		break;
 	default:
 		return 0;
@@ -345,6 +363,9 @@ uint8_t Scene::getStepParameter(STEP_PARAMETER param, uint8_t fromPart, uint8_t 
 		break;
 	case STEP_PARAMETER_INDEX:
 		return getStepIndex(fromPart, fromLane, step) + sceneData[activeScene].lane[fromPart][fromLane].indexOffset;
+		break;
+	case STEP_PARAMETER_MOD:
+		return getStepMod(fromPart, fromLane, step) + sceneData[activeScene].lane[fromPart][fromLane].modOffset;
 		break;
 	}
 	return 0;
@@ -402,8 +423,8 @@ uint8_t Scene::getLaneParameter(LANE_PARAMETER param, uint8_t fromPart, uint8_t 
 
 
 bool Scene::updateGateBuffer(uint16_t clock){
-
 	if((transportState==TRANSPORT_STATE_PLAY)){
+
 		for(int j = 0; j < 2; j++){
 			previousgateBuffer[j] = gateBuffer[j];
 
@@ -418,6 +439,12 @@ bool Scene::updateGateBuffer(uint16_t clock){
 				length+= getLaneParameter(LANE_PARAMETER_DIVISION, activePart, lane);
 
 				if(!(step & 0x01)){
+					gateBuffer[j] &= ~(1<<i);
+				}
+				else if(sceneData[activeScene].laneMute[activePart] & (1 << lane)){
+					gateBuffer[j] &= ~(1<<i);
+				}
+				else if(getStepParameter(STEP_PARAMETER_PROBABILITY,activePart,lane,activeStep) > dis(gen)){
 					gateBuffer[j] &= ~(1<<i);
 				}
 				else if(!(sceneData[activeScene].lane[activePart][lane].laneClock)){
@@ -467,7 +494,28 @@ bool Scene::updateGateBuffer(uint16_t clock){
 	}
 	return false;
 }
-
+void Scene::setStepMod(uint8_t part, uint8_t lane, uint8_t step, int8_t value){
+	if((sceneData[activeScene].lane[part][lane].modOffset + value) < 0){
+		sceneData[activeScene].lane[part][lane].mod[step] = 0;
+	}
+	else if((sceneData[activeScene].lane[part][lane].modOffset + value) > maxModValue){
+		sceneData[activeScene].lane[part][lane].mod[step] = maxModValue;
+	}
+	else{
+		sceneData[activeScene].lane[part][lane].mod[step] = value;
+	}
+}
+inline uint8_t Scene::getStepMod(uint8_t part, uint8_t lane, uint8_t step){
+	if((sceneData[activeScene].lane[part][lane].mod[step] + sceneData[activeScene].lane[part][lane].modOffset) < 0){
+		return 0;
+	}
+	else if((sceneData[activeScene].lane[part][lane].mod[step] + sceneData[activeScene].lane[part][lane].modOffset) > maxModValue){
+		return maxModValue;
+	}
+	else{
+		return (sceneData[activeScene].lane[part][lane].mod[step]);
+	}
+}
 void Scene::setStepIndex(uint8_t part, uint8_t lane, uint8_t step, int8_t value){
 	if((sceneData[activeScene].lane[part][lane].indexOffset + value) < 0){
 		sceneData[activeScene].lane[part][lane].index[step] = 0;
@@ -501,6 +549,7 @@ void Scene::setStepGlide(uint8_t part, uint8_t lane, uint8_t step, int8_t value)
 		//sceneData[activeScene].lane[part][lane].glide[step] = value;
 	}
 }
+// Return true if glide is needed
 
 bool Scene::updateCvBuffer(void){
 	float incrementor = 1/glideBufferSize;
@@ -509,9 +558,11 @@ bool Scene::updateCvBuffer(void){
 	uint8_t previousIndexBuffer[4];
 	for(int i = 0; i < 4; i++){
 		previousIndexBuffer[i] = indexBuffer[i];
-		indexBuffer[i] = getStepIndex(activePart,i, sceneData[activeScene].lane[activePart][i].activeStep );
-		indexBuffer[i] += sceneData[activeScene].lane[activePart][i].indexOffset;
-		cvBuffer[i][0] = scales[0][indexBuffer[i]];
+		if(getStepParameter(STEP_PARAMETER_NOTE_ON, activePart,i,sceneData[activeScene].lane[activePart][i].activeStep)){
+			indexBuffer[i] = getStepIndex(activePart,i, sceneData[activeScene].lane[activePart][i].activeStep );
+			indexBuffer[i] += sceneData[activeScene].lane[activePart][i].indexOffset;
+			cvBuffer[i][0] = scales[0][indexBuffer[i]];
+		}
 	}
 	for(int i = 0; i < 4; i++){
 		if(indexBuffer[i] != previousIndexBuffer[i]){
@@ -563,21 +614,26 @@ bool Scene::updateCvBuffer(void){
 	}
 	 */
 }
-
 void Scene::updateLaneClocks(void){
 	switch(transportState){
 	case TRANSPORT_STATE_PAUSE:
-		sceneData[activeScene].mainClock++;
 		break;
 	case TRANSPORT_STATE_STOP:
-		sceneData[activeScene].mainClock++;
+		sceneData[activeScene].mainClock = 0;
 		for(int i = 0; i < 16; i++){
-			sceneData[activeScene].lane[activePart][i].laneClock=0;
+			sceneData[activeScene].lane[activePart][i].laneClock = 0;
 			sceneData[activeScene].lane[activePart][i].activeStep = 0;
 		}
 		break;
 	case TRANSPORT_STATE_PLAY:
 		sceneData[activeScene].mainClock++;
+		if(!(sceneData[activeScene].mainClock%(nSteps*nTicksPerStep))){
+			if((focusedPart!=activePart) && playMode == PLAY_MODE_FOLLOW_FOCUS){
+				activePart = focusedPart;
+				transportState = TRANSPORT_STATE_RESET;
+			}
+		}
+
 		for(int i = 0; i < 16; i++){
 			int activeStep = sceneData[activeScene].lane[activePart][i].activeStep;
 			int length = 1;
@@ -590,13 +646,10 @@ void Scene::updateLaneClocks(void){
 				if(++sceneData[activeScene].lane[activePart][i].activeStep > sceneData[activeScene].lane[activePart][i].endStep){
 					// End of lane
 					sceneData[activeScene].lane[activePart][i].activeStep = 0;
-					if((focusedPart!=activePart) && playMode == PLAY_MODE_FOLLOW_FOCUS){
-						activePart = focusedPart;
-					}
-
 				}
 			}
 		}
+
 		break;
 	case TRANSPORT_STATE_RESET:
 		sceneData[activeScene].mainClock=0;

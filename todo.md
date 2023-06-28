@@ -1,7 +1,8 @@
 # FIRMWARE:
+- IO:
+	- Fix analog output
+	- Glide
 - Musical functionality:
- 	- Clock sync
- 	- MIDI
  	- Fill (euclidian)
 - Memory:
  	- Saving multiple scenes

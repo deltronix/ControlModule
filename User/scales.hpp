@@ -28,6 +28,9 @@ const uint16_t scales[2][128] = {{
 			65535},{}
 
 };
+const char notes[2][24]{
+	{'C','d','D','e','E','F','g','G','a','A','b','B'}
+};
 
 
 

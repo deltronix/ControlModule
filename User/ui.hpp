@@ -12,6 +12,7 @@
 #include "scene.hpp"
 #include "memory.hpp"
 #include "display.hpp"
+#include "clock.hpp"
 
 
 
@@ -75,7 +76,7 @@ public:
 	void readEncoders(Encoder& encoderA, Encoder& encoderB, Scene& scene);
 	void setStepSwitchLeds(Switches& stepSwitches, Scene& scene);
 	void updateDisplay(Display& display, Scene& scene);
-	void updateDisplayAndMemoryDma(Display& display, Memory& memory, Scene& scene, Switches& controlSwitches);
+	void updateDisplayAndMemoryDma(Display& display, Memory& memory, Scene& scene, Clock& clock, Switches& controlSwitches);
 };
 
 

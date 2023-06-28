@@ -25,7 +25,114 @@ IO::IO(SPI_HandleTypeDef* spi, UART_HandleTypeDef* uart){
 }
 
 IO::~IO(void){
+	;
+}
+IO_STATE IO::dmaStateMachine(void){
+	if(dmaTransferInProgress){
+		switch(ioState){
+		case IO_READY:
+			break;
+		case IO_ANALOG_WRITE:
+			HAL_GPIO_WritePin(SPI3_SYNC_GPIO_Port,SPI3_SYNC_Pin,GPIO_PIN_SET);
+			break;
+		case IO_DIGITAL_WRITE:
+			HAL_GPIO_WritePin(SPI3_RCLK_GPIO_Port,SPI3_RCLK_Pin,GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(SPI3_RCLK_GPIO_Port,SPI3_RCLK_Pin,GPIO_PIN_SET);
+			ioState = IO_DONE;
+			break;
+		}
 
+	}
+	switch(ioState){
+	case IO_READY:
+		dmaChannel = 0;
+		writeDacDma();
+		ioState = IO_ANALOG_WRITE;
+		break;
+	case IO_ANALOG_WRITE:
+		if(++dmaChannel < 4){
+			writeDacDma();
+		}
+		else{
+			ioState = IO_DIGITAL_WRITE;
+			HAL_GPIO_WritePin(SPI3_SYNC_GPIO_Port,SPI3_SYNC_Pin,GPIO_PIN_SET);
+			writeDigitalDma();
+		}
+		break;
+	case IO_DIGITAL_WRITE:
+		break;
+	case IO_DONE:
+		dmaTransferInProgress = false;
+		ioState = IO_READY;
+		break;
+	}
+	return ioState;
+}
+
+void IO::setBufferParameters(Scene& scene){
+	static bool setBufferParametersDone;
+
+	switch(scene.transportState){
+	case TRANSPORT_STATE_RESET:
+		dmaSample = 0;
+		setBufferParametersDone = false;
+		break;
+	case TRANSPORT_STATE_STOP:
+		if(!setBufferParametersDone){
+			activeAnalogBuffer = 0;
+			for(uint8_t lane = 0; lane < 4; lane++){
+				analogBuffer[lane][activeAnalogBuffer].position = 0;
+				waitingForBufferUpdate[activeAnalogBuffer] = true;
+			}
+			setBufferParametersDone = true;
+		}
+		break;
+	case TRANSPORT_STATE_PLAY:
+		dmaSample++;
+		if(dmaSample < 96){
+
+		}
+		else{
+			dmaSample = 0;
+			for(uint8_t lane = 0; lane < 4; lane++){
+				analogBuffer[lane][activeAnalogBuffer].position+= 96;
+			}
+			activeAnalogBuffer ^= 1;
+			setBufferParametersDone = false;
+		}
+		if(!setBufferParametersDone){
+			for(uint8_t lane = 0; lane < 4; lane++){
+				waitingForBufferUpdate[activeAnalogBuffer^1] = true;
+				setBufferParametersDone = true;
+			}
+		}
+		break;
+	}
+
+}
+
+void IO::startDmaTransfer(Scene& scene){
+	if(!dmaTransferInProgress){
+		dmaStateMachine();
+	}
+
+
+}
+void IO::writeDigitalDma(void){
+	dmaTransferInProgress = true;
+	HAL_GPIO_WritePin(SPI3_SYNC_GPIO_Port,SPI3_SYNC_Pin,GPIO_PIN_SET);
+	HAL_SPI_Transmit_IT(hspi, digitalBuffer,2);
+
+}
+
+void IO::writeDacDma(void){
+	dmaBuffer[0] = 0;
+	dmaBuffer[1] = dmaChannel;
+	dmaBuffer[2] = (analogBuffer[dmaChannel][activeAnalogBuffer].samples[dmaSample] & 0xFF00) >> 8;
+	dmaBuffer[3] = (analogBuffer[dmaChannel][activeAnalogBuffer].samples[dmaSample] & 0x00FF);
+	HAL_GPIO_WritePin(SPI3_SYNC_GPIO_Port,SPI3_SYNC_Pin,GPIO_PIN_RESET);
+	HAL_SPI_Transmit_IT(hspi, dmaBuffer, 4);
+	dmaTransferInProgress = true;
 }
 
 void IO::setDacRegister(uint8_t reg, uint8_t chan, uint16_t val){
@@ -55,6 +162,7 @@ void IO::writeDacs(void){
 			dacOutState[i] = dacOutBuffer[i];
 		}
 	}
+	// ---------------------------- SWITCH FUNCTIONS  ---------------
 }
 void IO::initDacs(uint8_t range){
 	uint8_t buffer[4] = {0,0,0,0};
@@ -69,6 +177,122 @@ void IO::initDacs(uint8_t range){
 	HAL_Delay(1);
 }
 
+
+// Calculate DAC samples for the next step.
+bool IO::updateAnalogBuffer(Scene& scene){
+	for(uint8_t buffer = 0; buffer < 2; buffer++){
+		if(waitingForBufferUpdate[buffer]){
+			for(uint8_t lane = 0; lane < 4; lane++){
+				uint8_t step;
+				uint32_t glideLength = 0;
+
+
+				if(buffer == activeAnalogBuffer){
+					step = scene.getLaneActiveStep(lane);
+					analogBuffer[lane][buffer].position = 0;
+					analogBuffer[lane][buffer].startValue = scales[scene.getLaneParameter(LANE_PARAMETER_SCALE, scene.activePart, lane)]
+																   [scene.getStepParameter(STEP_PARAMETER_INDEX, scene.activePart, lane, step)];
+					uint8_t i = 0;
+					for(bool endFound = false; endFound != true;){
+						uint8_t seekEndStep = (step + i) % scene.getLaneParameter(LANE_PARAMETER_END_STEP, scene.activePart, lane);
+
+						if(!(scene.getStepParameter(STEP_PARAMETER_NOTE_ON, scene.activePart, lane, seekEndStep))){
+							glideLength += (1 + scene.getStepParameter(STEP_PARAMETER_LENGTH, scene.activePart, lane, seekEndStep));
+						}
+						else if(i > nSteps){
+							analogBuffer[lane][buffer].endValue = scales[scene.getLaneParameter(LANE_PARAMETER_SCALE, scene.activePart, lane)]
+																		 [scene.getStepParameter(STEP_PARAMETER_INDEX, scene.activePart, lane, seekEndStep)];
+							// Set length according to lane subdivision and the numbers of ticks per step
+							analogBuffer[lane][buffer].length = glideLength * 96 * (1 + scene.getLaneParameter(LANE_PARAMETER_DIVISION, scene.activePart, lane));
+							analogBuffer[lane][buffer].incrementor = (analogBuffer[lane][buffer].endValue - analogBuffer[lane][buffer].startValue)
+																															/ analogBuffer[lane][buffer].length;
+							endFound = true;
+						}
+						else{
+							analogBuffer[lane][buffer].endValue = scales[scene.getLaneParameter(LANE_PARAMETER_SCALE, scene.activePart, lane)]
+																		 [scene.getStepParameter(STEP_PARAMETER_INDEX, scene.activePart, lane, seekEndStep)];
+							// Set length according to lane subdivision and the numbers of ticks per step
+							analogBuffer[lane][buffer].length = glideLength * 96 * (1 + scene.getLaneParameter(LANE_PARAMETER_DIVISION, scene.activePart, lane));
+							analogBuffer[lane][buffer].incrementor = (analogBuffer[lane][buffer].endValue - analogBuffer[lane][buffer].startValue)
+																																	/ analogBuffer[lane][buffer].length;
+							endFound = true;
+						}
+						i++;
+
+					}
+				}
+				// Check if curve ends after this buffer
+				else if(analogBuffer[lane][activeAnalogBuffer].position + nTicksPerStep >= analogBuffer[lane][activeAnalogBuffer].length){
+					// Then make sure the inactive buffer calculates a new curve from the next step
+					if(scene.getLaneActiveStep(lane) == scene.getLaneParameter(LANE_PARAMETER_END_STEP, scene.activePart, lane)){step = 0;}
+					else{step = scene.getLaneActiveStep(lane) + 1;}
+
+					// If the next step is not turned on, fill buffer with end value of last buffer
+					if(!scene.getStepParameter(STEP_PARAMETER_NOTE_ON, scene.activePart, lane, step)){
+						analogBuffer[lane][buffer].position = 0;
+						analogBuffer[lane][buffer].startValue = analogBuffer[lane][buffer^1].endValue;
+						analogBuffer[lane][buffer].endValue = analogBuffer[lane][buffer^1].endValue;
+					}
+					else{
+						// Update start and end value, length and reset position when currently active buffer is done
+						analogBuffer[lane][buffer].position = 0;
+						analogBuffer[lane][buffer].startValue = scales[scene.getLaneParameter(LANE_PARAMETER_SCALE, scene.activePart, lane)]
+																	   [scene.getStepParameter(STEP_PARAMETER_INDEX, scene.activePart, lane, step)];
+						uint8_t i = 0;
+						for(bool endFound = false; endFound != true;){
+							uint8_t seekEndStep = (step + i) % scene.getLaneParameter(LANE_PARAMETER_END_STEP, scene.activePart, lane);
+
+							if(!(scene.getStepParameter(STEP_PARAMETER_NOTE_ON, scene.activePart, lane, seekEndStep))){
+								glideLength += (1 + scene.getStepParameter(STEP_PARAMETER_LENGTH, scene.activePart, lane, seekEndStep));
+							}
+							else if(i > nSteps){
+								analogBuffer[lane][buffer].endValue = scales[scene.getLaneParameter(LANE_PARAMETER_SCALE, scene.activePart, lane)]
+																			 [scene.getStepParameter(STEP_PARAMETER_INDEX, scene.activePart, lane, seekEndStep)];
+								// Set length according to lane subdivision and the numbers of ticks per step
+								analogBuffer[lane][buffer].length = glideLength * 96 * (1 + scene.getLaneParameter(LANE_PARAMETER_DIVISION, scene.activePart, lane));
+								analogBuffer[lane][buffer].incrementor = (analogBuffer[lane][buffer].endValue - analogBuffer[lane][buffer].startValue)
+																												/ analogBuffer[lane][buffer].length;
+								endFound = true;
+							}
+							else{
+								analogBuffer[lane][buffer].endValue = scales[scene.getLaneParameter(LANE_PARAMETER_SCALE, scene.activePart, lane)]
+																			 [scene.getStepParameter(STEP_PARAMETER_INDEX, scene.activePart, lane, seekEndStep)];
+								// Set length according to lane subdivision and the numbers of ticks per step
+								analogBuffer[lane][buffer].length = glideLength * 96 * (1 + scene.getLaneParameter(LANE_PARAMETER_DIVISION, scene.activePart, lane));
+								analogBuffer[lane][buffer].incrementor = (analogBuffer[lane][buffer].endValue - analogBuffer[lane][buffer].startValue)
+																												/ analogBuffer[lane][buffer].length;
+								endFound = true;
+							}
+
+						}
+					}
+				}
+				else{
+					// Continue the current curve
+					analogBuffer[lane][buffer].position = analogBuffer[lane][buffer^1].position;
+					analogBuffer[lane][buffer].startValue = analogBuffer[lane][buffer^1].startValue;
+					analogBuffer[lane][buffer].startValue = analogBuffer[lane][buffer^1].endValue;
+					analogBuffer[lane][buffer].length = analogBuffer[lane][buffer^1].length;
+
+				}
+
+				uint16_t bufferStart = analogBuffer[lane][buffer].startValue +
+						(analogBuffer[lane][buffer].incrementor*analogBuffer[lane][buffer].position);
+
+				for(uint16_t sample = 0; sample < nTicksPerStep; sample++){
+					analogBuffer[lane][buffer].samples[sample] =
+							bufferStart + (analogBuffer[lane][buffer].incrementor*sample);
+				}
+
+			}
+			waitingForBufferUpdate[buffer] = false;
+		}
+	}
+
+}
+
+
+
 void IO::midiOut(Scene& scene){
 	for(uint8_t i = 0; i < 2; i++){
 		uint8_t changed = scene.gateBuffer[i] ^ scene.previousgateBuffer[i];
@@ -82,7 +306,9 @@ void IO::midiOut(Scene& scene){
 					if(scene.gateBuffer[i] & (1 << j)){
 						uint8_t channel = scene.getLaneParameter(LANE_PARAMETER_MIDI_CHAN, scene.activePart, lane);
 						if(!(channel & (1 << 4))){
-							midiNoteOn(channel, scene.getStepParameter(STEP_PARAMETER_INDEX,scene.activePart,lane,scene.getLaneActiveStep(lane)), 60);
+							midiNoteOn(channel,
+									scene.getStepParameter(STEP_PARAMETER_INDEX,scene.activePart,lane,scene.getLaneActiveStep(lane)),
+									scene.getStepParameter(STEP_PARAMETER_MOD,scene.activePart,lane,scene.getLaneActiveStep(lane)));
 						}
 
 					}

@@ -25,7 +25,7 @@
 
 // Constructor
 Clock::Clock(){
-	averagingWindow = 24;
+	averagingWindow = 23;
 	acceptableOutlierPercentage = 0.1;
 	subMult = 1;
 	;
@@ -86,16 +86,6 @@ unsigned int Clock::addPeriodSample(unsigned int periodSample){
 		acceptableDeviation = averagedPeriod*acceptableOutlierPercentage;
 		return averagedPeriod;
 	}
-	else if(sampleIndex > 22){
-			unsigned int temp = 0;
-			for(int i = 0; i < sampleIndex; i++){
-				temp+=sampleBuffer[i];
-			}
-			averagedPeriod = temp/(sampleIndex);
-
-			acceptableDeviation = averagedPeriod*acceptableOutlierPercentage;
-			return averagedPeriod;
-		}
 	else if(sampleIndex > 1){
 			unsigned int temp = 0;
 			for(int i = 0; i < sampleIndex; i++){

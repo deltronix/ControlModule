@@ -9,11 +9,16 @@
 #define SCENE_HPP_
 
 #include <stdint.h>
+#include <random>
+#include <stm32f4xx_hal.h>
+
 
 const uint8_t nSteps = 32;
 const uint8_t nLanes = 16;
 const uint8_t nParts = 16;
+const uint8_t nTicksPerStep = 48;
 const uint8_t maxScaleIndex = 127;
+const uint8_t maxModValue = 127;
 const uint8_t glideBufferSize = 16;
 
 enum STEP_PARAMETER{
@@ -24,7 +29,7 @@ enum STEP_PARAMETER{
 	STEP_PARAMETER_PROBABILITY = 12,
 	STEP_PARAMETER_INDEX = 15,
 	STEP_PARAMETER_GLIDE = 23,
-	STEP_PARAMETER_MOD = 24
+	STEP_PARAMETER_MOD = 24,
 };
 enum LANE_NOTE_STATE{
 	LANE_NOTE_UNCHANGED,
@@ -84,12 +89,12 @@ struct Lane{
 	// Step data
 	uint16_t step[nSteps] = {0};
 	int8_t index[nSteps] = {0};
-	int8_t glide[nSteps] = {0};
 	int8_t mod[nSteps] = {0};
 
 	// Parameters
 	uint8_t endStep = nSteps-1;
 	uint8_t indexOffset = 60;
+	uint8_t modOffset = 63;
 	uint8_t division = 0;
 	uint8_t midiChan = MIDI_CHAN_OFF;
 	uint8_t scale = 0;
@@ -105,7 +110,11 @@ struct SceneMetaData{
 	uint32_t memoryAddress;
 	char sceneName[16] = "Test Scene";
 };
-
+struct LaneMetaData{
+	uint8_t scale = 0;
+	uint8_t cvMode = 0;
+	uint8_t midiChan = MIDI_CHAN_OFF;
+};
 struct SceneData{
 	// This struct is to be stored in internal FLASH (as well?)
 	SceneMetaData metaData;
@@ -132,7 +141,10 @@ struct Selection{
 class Scene{
 public:
 	uint8_t activeScene, activePart, focusedPart, focusedScene, focusedLane, focusedStep;
+	uint32_t randomNumber;
 
+	std::default_random_engine gen;
+	std::uniform_int_distribution<int> dis;
 
 
 	STEP_PARAMETER focusedStepParameter;
@@ -170,21 +182,23 @@ public:
 	uint8_t getLaneParameter(LANE_PARAMETER param, uint8_t fromPart, uint8_t fromLane);
 	void incrementDecrementLaneParameter(int n);
 
+	void setStepMod(uint8_t part, uint8_t lane, uint8_t step, int8_t value);
+	inline uint8_t getStepMod(uint8_t part, uint8_t lane, uint8_t step);
+
 	void setStepIndex(uint8_t part, uint8_t lane, uint8_t step, int8_t value);
 	void setStepGlide(uint8_t part, uint8_t lane, uint8_t step, int8_t value);
 	inline uint8_t getStepIndex(uint8_t part, uint8_t lane, uint8_t step);
 
-	bool updateCvBuffer(void);
-	bool updateGateBuffer(uint16_t clock);
-
-	void updateLaneClocks(void);
 	uint8_t getLaneActiveStep(void);
 	uint8_t getLaneActiveStep(uint8_t lane);
 
 	LANE_NOTE_STATE laneNoteState(uint8_t lane);
 
+	void updateLaneClocks(void);
+	bool updateGateBuffer(uint16_t clock);
+	bool updateCvBuffer(void);
 	uint8_t gateBuffer[2], previousgateBuffer[2];
-	uint16_t cvBuffer[nSteps][glideBufferSize];
+	uint16_t cvBuffer[4][glideBufferSize];
 
 	SceneData sceneData[2];
 	SceneData& activeScenePointer(void);

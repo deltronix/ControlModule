@@ -104,8 +104,15 @@ void UserInterface::readSwitches(Switches& controlSwitches,Switches& stepSwitche
 				scene.focusPart(stepSwitches.firstPressed());
 				break;
 			case SCOPE_LANE:
-				scene.focusLane(stepSwitches.firstPressed());
-				changeScope(SCOPE_STEP);
+				if(stepSwitches.firstPressed() < 16){
+					scene.focusLane(stepSwitches.firstPressed());
+					changeScope(SCOPE_STEP);
+				}
+				else{
+					scene.sceneData[scene.focusedScene].laneMute[scene.focusedPart] ^= (1 << (stepSwitches.firstPressed()-16));
+				}
+
+
 				break;
 			case SCOPE_STEP:
 				scene.toggleStepNoteOn(stepSwitches.firstPressed());
@@ -157,6 +164,7 @@ void UserInterface::setStepSwitchLeds(Switches& stepSwitches, Scene& scene){
 		stepSwitches.setLedAll(PWM_OFF);
 		// stepSwitches.setLedArray(0,2,scene.gateBuffer,PWM_FULL,PULSE_MODE_OFF);
 		stepSwitches.setLed(scene.focusedLane,PWM_FULL,PULSE_MODE_OFF);
+		stepSwitches.setLedArray(2, 2,(uint8_t*) &scene.sceneData[scene.focusedScene].laneMute[scene.focusedPart], 0, PWM_FULL, PULSE_MODE_OFF);
 		break;
 	case SCOPE_STEP:
 		uint8_t valueArray[stepSwitches.numOfRegisters];
@@ -173,7 +181,7 @@ void UserInterface::updateDisplay(Display& display, Scene& scene){
 }
 
 
-void UserInterface::updateDisplayAndMemoryDma(Display& display, Memory& memory, Scene& scene, Switches& controlSwitches){
+void UserInterface::updateDisplayAndMemoryDma(Display& display, Memory& memory, Scene& scene, Clock& clock, Switches& controlSwitches){
 	if(display.doneWriting()){
 		switch(uiState){
 		case UI_STATE_NOTIFY_SAVING:
@@ -200,11 +208,17 @@ void UserInterface::updateDisplayAndMemoryDma(Display& display, Memory& memory, 
 			display.clearBuffer();
 			display.stringToBuffer(30,0,font_6x8,stringTx,0);
 			switch(scope){
+			case SCOPE_PART:
+				break;
 			case SCOPE_LANE:
 				display.laneParameters(scene);
 				break;
 			case SCOPE_STEP:
 				display.displayStepParameterGrid(scene.focusedStepParameter, scene.focusedStep, scene);
+				break;
+			case SCOPE_SCENE:
+			sprintf(stringTx,"CLK: %d", clock.averagedPeriod);
+			display.stringToBuffer(30,1,font_6x8,stringTx,0);
 				break;
 			default:
 				break;

@@ -14,6 +14,7 @@ uint8_t ui_spi_out[NUM_OF_REGISTERS];
 std::vector<uint8_t> Switches::spi_in = {0,0,0,0,0,0};
 std::vector<uint8_t> Switches::spi_out = {0,0,0,0,0,0};
 uint8_t Switches::totalNumOfRegisters = 0;
+
 Encoder::Encoder(uint8_t nStates,GPIO_TypeDef* GPIO_Port, uint16_t GPIO_Pin_A, uint16_t GPIO_Pin_B, uint16_t GPIO_Pin_Sw){
 	numOfStates = nStates;
 	port = GPIO_Port;
@@ -28,24 +29,35 @@ Encoder::~Encoder(){
 	;
 }
 bool Encoder::update(void){
+	// Remember the previous state of the pins in order to detect a state change
 	bool oldStateA=debouncedStateA;
 	bool oldStateB=debouncedStateB;
 	bool oldStateSw=debouncedStateSw;
 
-	if(!(port->IDR & pinA)){bufferA |= (1 << index);}
-	else		{bufferA &= ~(1 << index);}
+	// Read GPIO inputs and write to the debouncing buffer
+	if(!(port->IDR & pinA))	{bufferA |= (1 << index);}
+	else					{bufferA &= ~(1 << index);}
+	
 	if(!(port->IDR & pinB))	{bufferB |= (1 << index);}
-	else		{bufferB &= ~(1 << index);}
-	if(!(port->IDR & pinSw))	{bufferSw |= (1 << index);}
-	else		{bufferSw &= ~(1 << index);}
+	else					{bufferB &= ~(1 << index);}
+	
+	if(!(port->IDR & pinSw)){bufferSw |= (1 << index);}
+	else					{bufferSw &= ~(1 << index);}
+	
+	// Increment or reset the position in the debouncing buffer
+	if(++index >= numOfStates){index = 0;}
+		
+	// Check if the buffer is full or empty (e.g. fullState is 00001111 when numOfStates is 4).
+	if(bufferA == fullState)	{debouncedStateA = 1;}
+	else if(bufferA == 0)		{debouncedStateA = 0;}
+	
+	if(bufferB == fullState)	{debouncedStateB = 1;}
+	else if(bufferB == 0)		{debouncedStateB = 0;}
+	
+	if(bufferSw == fullState)	{debouncedStateSw = 1;}
+	else if(bufferSw == 0)		{debouncedStateSw = 0;}
 
-	if(bufferA == fullState){debouncedStateA = 1;}
-	else if(bufferA == 0){debouncedStateA = 0;}
-	if(bufferB == fullState){debouncedStateB = 1;}
-	else if(bufferB == 0){debouncedStateB = 0;}
-	if(bufferSw == fullState){debouncedStateSw = 1;}
-	else if(bufferSw == 0){debouncedStateSw = 0;}
-
+	// Update switch state
 	if(debouncedStateSw!=oldStateSw){
 		switchChanged = true;
 	}
@@ -53,21 +65,22 @@ bool Encoder::update(void){
 		switchChanged = false;
 	}
 
+	
 	encoderChanged = false;
-
+	
+	// Check if pin A's state is different from pin B
 	if(debouncedStateA ^ debouncedStateB){
+		// If pin A has changed the encoder was turned clockwise
 		if(debouncedStateA != oldStateA){
 			encoderChanged = true;
 			counter++;
 		}
-		if(debouncedStateB != oldStateB){
+		// If pin B has changed the encoder was turned counter clockwise
+		else if(debouncedStateB != oldStateB){
 			encoderChanged = true;
 			counter--;
 		}
 	}
-
-	if(++index >= numOfStates){index = 0;}
-
 	return encoderChanged | switchChanged;
 }
 bool Encoder::hasChanged(void){
@@ -119,13 +132,12 @@ void Switches::spi(void){
 	HAL_GPIO_WritePin(RCLK_GPIO_Port, RCLK_Pin,GPIO_PIN_SET);
 }
 void Switches::update(int subTick){
-
 	uint8_t lastDebouncedState[numOfRegisters];
 	uint8_t ledMask[numOfRegisters];
 	uint8_t i, x, j;
 	static uint8_t PWMcounter;
 	int shift;
-	uint8_t pulse = subTick/48;
+	uint8_t pulse = subTick/24;
 
 	if(++PWMcounter >= 64){
 		PWMcounter = 1;
@@ -354,10 +366,10 @@ void Switches::setLedArray(int offset, int n, uint8_t* mask, PWM_MODE pwm, PULSE
 }
 void Switches::setLedArray(int offset, int n, uint8_t* mask, bool inverted, PWM_MODE pwm, PULSE_MODE pulse){
 	if(inverted){
-		for(int i = offset; i < offset+n; i++){
+		for(int i = 0; i < n; i++){
 			for(int j = 0; j < 8; j++){
 				if(~(mask[i]) & (1 << j)){
-					int step = i*8+j;
+					int step = ((i+offset)*8)+j;
 					ledPulse[step] = pulse;
 					ledPWM[step] = pwm;
 				}
@@ -365,10 +377,10 @@ void Switches::setLedArray(int offset, int n, uint8_t* mask, bool inverted, PWM_
 		}
 	}
 	else{
-		for(int i = offset; i < offset+n; i++){
+		for(int i = 0; i < n; i++){
 			for(int j = 0; j < 8; j++){
 				if(mask[i] & (1 << j)){
-					int step = i*8+j;
+					int step = ((i+offset)*8)+j;
 					ledPulse[step] = pulse;
 					ledPWM[step] = pwm;
 				}
